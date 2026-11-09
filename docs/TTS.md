@@ -60,7 +60,11 @@ the same object directly at `GET /api/korean_readiness`:
 
 The vendor probe uses the existing read-only `scripts/korean_voice_probe.py` in an
 isolated `-I -B` child, not a model load, installer, downloader or microphone. It
-rejects network/process creation and file writes inside the child. Concurrent
+rejects network/process creation and file writes inside the child. Local hostname
+reads are allowed. NumPy's optional, no-argument `lscpu` discovery is stopped before
+process creation and receives `FileNotFoundError`; no CPU command is executed.
+Other process/network/write attempts remain sticky failures even if a dependency
+catches the exception. Third-party imports still run with the guard active. Concurrent
 requests share one child. Results are cached in memory for at most 30 seconds per
 resolved checkout, never persisted. Changing engine state or checkout invalidates
 in-flight success. Cancelling one HTTP caller does not cancel another caller's

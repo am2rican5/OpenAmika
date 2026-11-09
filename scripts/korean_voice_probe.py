@@ -34,6 +34,12 @@ def install_verification_guard() -> None:
     sys.dont_write_bytecode = True
 
     def audit(event, args):
+        if event == "socket.gethostname":
+            return  # Local metadata lookup; no socket is created or connected.
+        if (event == "subprocess.Popen" and args[0] in (None, "lscpu") and
+                (args[1] == "lscpu" or args[1] == ["lscpu"])):
+            # NumPy treats this optional CPU probe as unsupported when it cannot run.
+            raise FileNotFoundError("verification does not run lscpu")
         if event.startswith(("subprocess.", "socket.", "urllib.Request")) or event in {
             "os.system", "os.exec", "os.posix_spawn", "os.spawn", "os.fork", "os.forkpty",
             "os.remove", "os.rename", "os.rmdir", "os.mkdir", "os.link", "os.symlink",

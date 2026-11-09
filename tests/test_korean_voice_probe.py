@@ -128,6 +128,14 @@ def test_bad_initialization_or_empty_phones(voice, body):
     "import subprocess; subprocess.Popen(['pip', 'install', 'eunjeon'])",
     "import subprocess; subprocess.run([__import__('sys').executable, '-m', 'pip', 'install', 'python-mecab-ko'])",
     "import os; os.system('echo unsafe')",
+    "import socket; socket.getaddrinfo('example.invalid', 443)",
+    "import socket; socket.gethostbyname('example.invalid')",
+    "import socket; socket.socket()",
+    "import subprocess; subprocess.run(['lscpu', '--help'])",
+    "import subprocess; subprocess.run('lscpu --help')",
+    "import subprocess; subprocess.run('lscpu', shell=True)",
+    "import subprocess; subprocess.run('lscpu', executable='pip')",
+    "import subprocess; subprocess.run('/usr/bin/lscpu')",
     "import socket; socket.create_connection(('127.0.0.1', 9))",
     "import urllib.request; urllib.request.urlopen('https://example.invalid/')",
     "import nltk; nltk.download('cmudict')",
@@ -360,3 +368,44 @@ def test_nltk_temp_directory_lookup_does_not_write(voice):
         "def find(name):\n    tempfile.gettempdir()\n    return name\n")
     result = run_probe(voice)
     assert result['ok'], result['detail']
+
+
+def test_local_hostname_read_allowed_during_nltk_import(voice):
+    _, packages, _ = voice
+    init = packages / "nltk" / "__init__.py"
+    init.write_text(
+        "import platform, socket\n"
+        "platform.machine = socket.gethostname\n"
+        "assert isinstance(platform.machine(), str)\n" + init.read_text())
+    result = run_probe(voice)
+    assert result["ok"], result["detail"]
+
+
+def test_numpy_style_cpu_probe_during_nltk_import(voice):
+    _, packages, _ = voice
+    init = packages / "nltk" / "__init__.py"
+    init.write_text(
+        "import subprocess\n"
+        "try:\n"
+        "    subprocess.run('lscpu', capture_output=True, text=True)\n"
+        "except FileNotFoundError:\n"
+        "    pass\n"
+        "else:\n"
+        "    raise AssertionError('CPU probe reached a real backend')\n" + init.read_text())
+    result = run_probe(voice)
+    assert result["ok"], result["detail"]
+
+
+@pytest.mark.parametrize("executable,command", [(None, "lscpu"), ("lscpu", ["lscpu"])])
+def test_cpu_audit_payloads_report_unavailable_without_execution(voice, executable, command):
+    voice[2].joinpath("korean.py").write_text(
+        "import sys\n"
+        "try:\n"
+        f"    sys.audit('subprocess.Popen', {executable!r}, {command!r}, None, None)\n"
+        "except FileNotFoundError:\n"
+        "    pass\n"
+        "else:\n"
+        "    raise AssertionError('CPU probe audit did not stop execution')\n"
+        "def g2p(text): return ['a', 'n']\n")
+    result = run_probe(voice)
+    assert result["ok"], result["detail"]
