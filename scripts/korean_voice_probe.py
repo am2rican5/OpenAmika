@@ -13,8 +13,8 @@ import importlib
 import importlib.util
 import json
 import os
-import platform
 import sys
+import tempfile
 from pathlib import Path
 
 _DENIED: list[str] = []
@@ -51,27 +51,20 @@ def install_verification_guard() -> None:
     _GUARDED = True
 
 
-def prerequisites(engine: Path, windows: bool) -> None:
+def prerequisites(engine: Path) -> None:
     """Check packages and local data without importing g2pk2 or text.korean.
 
     g2pk2 0.0.3 checks cmudict.zip at import, even if an unpacked copy exists,
     and installs eunjeon (Windows) or python-mecab-ko in its constructor.
     """
-    names = ["g2pk2", "jamo", "ko_pron", "nltk", "eunjeon" if windows else "mecab"]
-    if not windows:
-        names.append("mecab_ko_dic")
+    names = ["g2pk2", "jamo", "ko_pron", "nltk", "mecab", "mecab_ko_dic"]
     specs = {name: importlib.util.find_spec(name) for name in names}
     missing = [name for name, spec in specs.items() if spec is None]
     if missing:
         raise RuntimeError("missing package(s): " + ", ".join(missing) +
                            " (mecab is provided by python-mecab-ko)")
-    if windows:
-        dictionary = Path(next(iter(specs["eunjeon"].submodule_search_locations))) / "data"
-        rc = dictionary / "mecabrc"
-    else:
-        # The default used by python-mecab-ko, not an invented dictionary location.
-        dictionary = Path(importlib.import_module("mecab_ko_dic").dictionary_path)
-        rc = Path(next(iter(specs["mecab"].submodule_search_locations))) / "mecabrc"
+    dictionary = Path(importlib.import_module("mecab_ko_dic").dictionary_path)
+    rc = Path(next(iter(specs["mecab"].submodule_search_locations))) / "mecabrc"
     files = [dictionary / name for name in ("sys.dic", "unk.dic", "matrix.bin", "char.bin")]
     files.append(rc)
     missing_files = [str(path) for path in files if not path.is_file()]
@@ -96,12 +89,34 @@ def prerequisites(engine: Path, windows: bool) -> None:
             raise RuntimeError(f"missing NLTK data: {resource} in {engine / 'nltk_data'}") from exc
 
 
+def install_windows_mecab() -> None:
+    """Use the wheel-backed tokenizer in g2pk2 and GPT-SoVITS's Windows subclass."""
+    import g2pk2
+    from mecab import MeCab
+
+    class WheelG2p(g2pk2.G2p):
+        def __init__(self, *args, **kwargs):
+            # Bypass both g2pk2's installer and win_G2p's eunjeon dictionary-copy workaround.
+            self.check_mecab = lambda: None
+            super().__init__(*args, **kwargs)
+
+        def get_mecab(self):
+            return MeCab()
+
+    g2pk2.G2p = WheelG2p
+
+
 def probe(engine: str | Path, *, windows: bool | None = None, gsv_dir: str | Path | None = None) -> dict:
     """Return {ok, detail}; success is a G2P smoke check, not audio acceptance."""
     install_verification_guard()
     engine = Path(engine)
     try:
-        prerequisites(engine, platform.system() == "Windows" if windows is None else windows)
+        windows = sys.platform == "win32" if windows is None else windows
+        # NLTK path validation asks for a temp root; avoid tempfile's write-based discovery.
+        tempfile.tempdir = str(engine.resolve())
+        prerequisites(engine)
+        if windows:
+            install_windows_mecab()
         gsv = Path(gsv_dir) if gsv_dir is not None else engine / "GPT-SoVITS"
         sys.path.insert(0, str(gsv / "GPT_SoVITS"))
         korean = importlib.import_module("text.korean")

@@ -54,6 +54,7 @@ import math
 import os
 import queue
 import re
+import runpy
 import shutil
 import subprocess
 import sys
@@ -398,6 +399,8 @@ def require_korean_voice(gsv_dir: Path) -> None:
         if not isinstance(result, dict) or result.get("ok") is not True:
             raise RuntimeError(result.get("detail", "invalid probe result") if isinstance(result, dict)
                                else "invalid probe result")
+        if IS_WIN:
+            runpy.run_path(str(helper))["install_windows_mecab"]()
         _KOREAN_VERIFIED.add(gsv_dir)
     except (OSError, ValueError, IndexError, RuntimeError, subprocess.TimeoutExpired) as exc:
         raise KoreanVoiceUnavailable(f"Korean voice unavailable: {exc}. Korean text remains available. "

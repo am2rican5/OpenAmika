@@ -25,6 +25,8 @@ def voice(tmp_path):
     (packages / "mecab_ko_dic" / "__init__.py").write_text(
         "from pathlib import Path\ndictionary_path = Path(__file__).parent / 'dicdir'\n")
     (packages / "mecab" / "mecabrc").write_text("")
+    (packages / "g2pk2" / "__init__.py").write_text("class G2p: pass\n")
+    (packages / "mecab" / "__init__.py").write_text("class MeCab: pass\n")
     nltk = packages / "nltk"
     nltk.mkdir()
     (nltk / "__init__.py").write_text(
@@ -46,7 +48,7 @@ def voice(tmp_path):
 def run_probe(voice, windows=False, timeout=5, gsv_dir=None):
     engine, packages, _ = voice
     code = f"""
-import importlib.util, sys, json, subprocess, socket
+import importlib.util, sys, json, subprocess, socket, platform
 def forbidden(*a, **k):
     raise AssertionError('reached real process/network backend')
 if hasattr(subprocess, '_fork_exec'):
@@ -59,16 +61,20 @@ sys.path.insert(0, {str(packages)!r})
 spec = importlib.util.spec_from_file_location('probe', {str(SCRIPT)!r})
 p = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(p)
+# Simulate the uncached Windows platform.system -> socket.gethostname path.
+platform.system = socket.gethostname
+if {windows is None!r}:
+    sys.platform = 'win32'
 p.install_verification_guard()
 print(json.dumps(p.probe({str(engine)!r}, windows={windows!r}, gsv_dir={str(gsv_dir) if gsv_dir else None!r})))
 """
-    result = subprocess.run([sys.executable, "-I", "-B", "-c", code],
+    result = subprocess.run([sys.executable, "-I", "-S", "-B", "-c", code],
                             capture_output=True, text=True, timeout=timeout)
     assert result.returncode == 0, result.stderr
     return json.loads(result.stdout.splitlines()[-1])
 
 
-@pytest.mark.parametrize("windows,package", [(True, "eunjeon"), (False, "mecab"), (False, "g2pk2")])
+@pytest.mark.parametrize("windows,package", [(True, "mecab"), (False, "mecab"), (False, "g2pk2")])
 def test_missing_package_before_korean_import(voice, windows, package):
     _, packages, front = voice
     (packages / package).rename(packages / (package + "_absent"))
@@ -79,12 +85,12 @@ def test_missing_package_before_korean_import(voice, windows, package):
     assert "before prerequisites" not in result["detail"]
 
 
-@pytest.mark.parametrize("windows,package,folder", [(True, "eunjeon", "data"), (False, "mecab_ko_dic", "dicdir")])
+@pytest.mark.parametrize("windows,package,folder", [(True, "mecab_ko_dic", "dicdir"), (False, "mecab_ko_dic", "dicdir")])
 @pytest.mark.parametrize("missing", ["sys.dic", "unk.dic", "matrix.bin", "char.bin", "mecabrc"])
 def test_missing_dictionary_before_g2pk_import(voice, windows, package, folder, missing):
     _, packages, _ = voice
     target = packages / package / folder / missing
-    if not windows and missing == "mecabrc":
+    if missing == "mecabrc":
         target = packages / "mecab" / "mecabrc"
     target.unlink()
     (packages / "g2pk2" / "__init__.py").write_text("raise AssertionError('unsafe g2pk2 import')")
@@ -204,6 +210,10 @@ def test_runtime_existing_languages_skip_korean_gate(vendor, monkeypatch, tmp_pa
 def test_runtime_check_is_bounded_child_only(vendor, monkeypatch, tmp_path, outcome):
     from types import SimpleNamespace
     calls = []
+    configured = []
+    monkeypatch.setattr(vendor, "IS_WIN", True)
+    monkeypatch.setattr(vendor.runpy, "run_path", lambda path: {
+        "install_windows_mecab": lambda: configured.append(path)})
     def run(cmd, **kwargs):
         calls.append((cmd, kwargs))
         if outcome == "timeout":
@@ -219,6 +229,7 @@ def test_runtime_check_is_bounded_child_only(vendor, monkeypatch, tmp_path, outc
     else:
         with pytest.raises(RuntimeError, match="Korean voice unavailable"):
             vendor.require_korean_voice(tmp_path)
+    assert len(configured) == (1 if outcome == "ok" else 0)
     cmd, kw = calls[0]
     assert cmd[0] == sys.executable and "-I" in cmd and "-B" in cmd
     assert cmd[-1] == str(tmp_path) and kw["cwd"] == str(tmp_path)
@@ -263,6 +274,9 @@ def test_runtime_missing_helper_is_korean_only(vendor, monkeypatch, tmp_path):
 
 
 def test_runtime_success_cached_per_resolved_checkout(vendor, monkeypatch, tmp_path):
+    monkeypatch.setattr(vendor, "IS_WIN", True)
+    monkeypatch.setattr(vendor.runpy, "run_path", lambda path: {
+        "install_windows_mecab": lambda: None})
     from types import SimpleNamespace
     calls = []
     def run(cmd, **kw):
@@ -277,6 +291,9 @@ def test_runtime_success_cached_per_resolved_checkout(vendor, monkeypatch, tmp_p
 
 
 def test_runtime_failure_retried_then_success_cached(vendor, monkeypatch, tmp_path):
+    monkeypatch.setattr(vendor, "IS_WIN", True)
+    monkeypatch.setattr(vendor.runpy, "run_path", lambda path: {
+        "install_windows_mecab": lambda: None})
     from types import SimpleNamespace
     calls = []
     def run(cmd, **kw):
@@ -304,3 +321,42 @@ def test_korean_failure_has_stable_type_for_public_error(vendor, monkeypatch, tm
     with pytest.raises(RuntimeError) as error:
         vendor.require_korean_voice(tmp_path)
     assert getattr(error.value, 'code', None) == 'korean_voice_unavailable'
+
+
+def test_default_platform_detection_under_guard(voice):
+    result = run_probe(voice, windows=None)
+    assert result["ok"], result["detail"]
+
+
+def test_windows_uses_wheel_tokenizer_through_upstream_subclass(voice):
+    _, packages, front = voice
+    (packages / "mecab" / "__init__.py").write_text(
+        "class MeCab:\n    def pos(self, text): return [(text, 'NNG')]\n")
+    (packages / "g2pk2" / "__init__.py").write_text(
+        "class G2p:\n"
+        "    def __init__(self):\n"
+        "        self.check_mecab()\n"
+        "        self.mecab = self.get_mecab()\n"
+        "    def check_mecab(self): raise AssertionError('upstream installer')\n"
+        "    def get_mecab(self): raise AssertionError('upstream eunjeon loader')\n")
+    (front / "korean.py").write_text(
+        "from g2pk2 import G2p\n"
+        "class win_G2p(G2p):\n"
+        "    def check_mecab(self):\n"
+        "        super().check_mecab()\n"
+        "        raise AssertionError('upstream eunjeon dictionary workaround')\n"
+        "g = win_G2p()\n"
+        "def g2p(text):\n"
+        "    assert g.mecab.pos(text) == [(text, 'NNG')]\n"
+        "    return ['a', 'n']\n")
+    result = run_probe(voice, windows=True)
+    assert result["ok"], result["detail"]
+
+
+def test_nltk_temp_directory_lookup_does_not_write(voice):
+    _, packages, _ = voice
+    (packages / 'nltk' / 'data.py').write_text(
+        "import tempfile\npath = []\n"
+        "def find(name):\n    tempfile.gettempdir()\n    return name\n")
+    result = run_probe(voice)
+    assert result['ok'], result['detail']

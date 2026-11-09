@@ -61,7 +61,9 @@ ever disagree, the code wins, and you should fix this file in the same change.
   switches for one turn. Her prompts are Chinese on purpose and her inner thoughts (`我心想：`) stay Chinese.
   Korean voice remains experimental until actual Windows synthesis and pronunciation acceptance. Do not infer
   Korean capability from generic `/ping` health. `scripts/setup_tts.py --verify` checks Korean separately without
-  installing anything. Existing personalized templates may need a manual merge of the shipped language rules.
+  installing anything. Windows Korean uses the wheel-backed python-mecab-ko tokenizer in both the probe
+  and synthesis, bypassing upstream eunjeon auto-install/dictionary-copy code. Existing personalized templates
+  may need a manual merge of the shipped language rules.
 - **Three tiers, three LLM roles** (plus a fourth for memory), each with its own template, hot-reloaded on save:
 
   | role | template | what it does |

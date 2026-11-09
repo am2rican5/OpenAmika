@@ -69,6 +69,15 @@ allowlisted state/code fields cross the gateway. Redirects are not followed and
 the request cannot supply another URL. A failed check does not change the voice,
 language routing, text protocol, model files or consent.
 
+Windows uses `python-mecab-ko==1.3.7` (including its dictionary), the same Korean
+tokenizer as the other platforms, rather than building `eunjeon`. The probe and
+Korean synthesis share this adapter; neither invokes the upstream tokenizer
+installer or its `eunjeon` dictionary-copy workaround. Re-run the normal
+`scripts/setup_tts.py` installer to update an existing voice environment, then
+restart the voice server and run `scripts/setup_tts.py --verify`. Verification
+alone does not install the newly required Windows package. This fixes frontend
+prerequisites; Windows synthesis and pronunciation still need hardware acceptance.
+
 The HTTP readiness child has a **two-second** budget to keep Setup responsive.
 The explicit `scripts/setup_tts.py --verify` Korean check has a **30-second**
 budget and also never installs or downloads anything. A cold frontend import or
